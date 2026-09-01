@@ -17,15 +17,6 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.core.app.NotificationCompat
 
-/**
- * 基于 Android AccessibilityService 的全局广告关闭服务。
- *
- * 核心能力：
- * 1. 自动识别并点击关闭按钮。
- * 2. 检测倒计时广告（如“5s后可关闭”），轮询等待并自动关闭。
- * 3. 开机自启动 + Foreground Service 保活。
- * 4. 服务被杀后尝试重启。
- */
 class AdBlockAccessibilityService : AccessibilityService() {
 
     companion object {
@@ -33,7 +24,6 @@ class AdBlockAccessibilityService : AccessibilityService() {
         const val CHANNEL_ID = "adblock_service"
         const val NOTIF_ID = 1
 
-        // 直接关闭类文案
         private val CLOSE_TEXTS = setOf(
             "关闭", "关闭广告", "跳过", "跳过广告", "知道了", "朕知道了", "好的", "确定", "取消",
             "暂不", "稍后再说", "以后再说", "拒绝", "不同意", "不再提示", "不再显示", "忽略",
@@ -41,13 +31,11 @@ class AdBlockAccessibilityService : AccessibilityService() {
             "拒绝授权", "不允许", "仅使用期间允许"
         )
 
-        // 倒计时/等待类文案关键词
         private val COUNTDOWN_KEYWORDS = listOf(
             "秒后可关闭", "s后可关闭", "秒跳过", "s跳过", "倒计时", "后可跳过",
             "再看", "观看", "s后关闭", "秒后关闭"
         )
 
-        // 常见广告 SDK 的关闭按钮 id 关键字
         private val CLOSE_ID_PATTERNS = listOf(
             "close", "close_btn", "skip", "skip_btn", "dismiss", "cancel", "iv_close",
             "img_close", "btn_close", "tt_video_ad_close", "tt_splash_skip_btn",
@@ -70,43 +58,47 @@ class AdBlockAccessibilityService : AccessibilityService() {
     @Volatile
     private var isPolling = false
     private var pollStartTime = 0L
+    private var isConnected = false
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        serviceInfo = serviceInfo.apply {
-            eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
-                    AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
-                    AccessibilityEvent.TYPE_VIEW_CLICKED
-            feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
-            flags = AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
-                    AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
-                    AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
-            notificationTimeout = 50
+        try {
+            serviceInfo = serviceInfo.apply {
+                eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
+                        AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
+                        AccessibilityEvent.TYPE_VIEW_CLICKED
+                feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
+                flags = AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
+                        AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
+                        AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
+                notificationTimeout = 50
+            }
+            acquireWakeLock()
+            startForeground()
+            isConnected = true
+            Log.i(TAG, "AdBlock service connected")
+        } catch (e: Exception) {
+            Log.e(TAG, "onServiceConnected failed", e)
         }
-        acquireWakeLock()
-        startForeground()
-        Log.i(TAG, "AdBlock service connected")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event == null) return
-        val root = rootInActiveWindow ?: return
+        if (event == null || !isConnected) return
+        val root = try { rootInActiveWindow } catch (e: Exception) { null } ?: return
+        if (!root.isRefresh) return
         try {
-            // 1. 先尝试直接关闭
             if (findAndClickCloseNode(root)) return
-
-            // 2. 检测到倒计时广告时，进入轮询等待关闭
             if (containsCountdown(root) && !isPolling) {
                 startPollingCloseButton()
             }
-
-            // 3. 兜底：对 Dialog/Popup 点击角落小按钮
             val cls = event.className?.toString() ?: ""
             if (cls in DIALOG_CLASSES || event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
                 clickCornerCloseButton(root)
             }
+        } catch (e: Exception) {
+            Log.e(TAG, "onAccessibilityEvent error", e)
         } finally {
-            root.recycle()
+            try { root.recycle() } catch (e: Exception) { }
         }
     }
 
@@ -116,21 +108,11 @@ class AdBlockAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         super.onDestroy()
+        isConnected = false
         stopPolling()
-        wakeLock?.let { if (it.isHeld) it.release() }
-        // 服务被杀时尝试自救
-        val restartIntent = Intent(applicationContext, AdBlockAccessibilityService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(restartIntent)
-        } else {
-            startService(restartIntent)
-        }
+        try { wakeLock?.let { if (it.isHeld) it.release() } } catch (e: Exception) { }
     }
 
-    /**
-     * 轮询：每 400ms 检查一次关闭按钮，持续最多 30s。
-     * 专门应对“观看 N 秒后可关闭”的广告。
-     */
     private fun startPollingCloseButton() {
         isPolling = true
         pollStartTime = System.currentTimeMillis()
@@ -138,7 +120,11 @@ class AdBlockAccessibilityService : AccessibilityService() {
 
         val runnable = object : Runnable {
             override fun run() {
-                val root = rootInActiveWindow
+                if (!isConnected) {
+                    isPolling = false
+                    return
+                }
+                val root = try { rootInActiveWindow } catch (e: Exception) { null }
                 if (root == null) {
                     stopPollingIfTimeout()
                     return
@@ -151,7 +137,7 @@ class AdBlockAccessibilityService : AccessibilityService() {
                         return
                     }
                 } finally {
-                    root.recycle()
+                    try { root.recycle() } catch (e: Exception) { }
                 }
 
                 if (System.currentTimeMillis() - pollStartTime < POLL_MAX_DURATION_MS) {
@@ -178,16 +164,14 @@ class AdBlockAccessibilityService : AccessibilityService() {
         }
     }
 
-    /**
-     * 检测界面是否包含倒计时提示。
-     */
     private fun containsCountdown(root: AccessibilityNodeInfo): Boolean {
-        return findNodeByCondition(root) { node ->
+        val node = findNodeByCondition(root) { node ->
             val text = node.text?.toString() ?: ""
             val desc = node.contentDescription?.toString() ?: ""
             val all = "$text $desc"
             COUNTDOWN_KEYWORDS.any { all.contains(it) }
-        } != null
+        }
+        return node != null
     }
 
     private fun findAndClickCloseNode(root: AccessibilityNodeInfo): Boolean {
@@ -198,7 +182,7 @@ class AdBlockAccessibilityService : AccessibilityService() {
         while (queue.isNotEmpty()) {
             val (node, depth) = queue.removeFirst()
             if (depth > MAX_DEPTH) {
-                node.recycle()
+                try { node.recycle() } catch (e: Exception) { }
                 continue
             }
 
@@ -208,7 +192,7 @@ class AdBlockAccessibilityService : AccessibilityService() {
                 for (i in 0 until node.childCount) {
                     node.getChild(i)?.let { queue.add(it to depth + 1) }
                 }
-                node.recycle()
+                try { node.recycle() } catch (e: Exception) { }
             }
         }
 
@@ -232,7 +216,7 @@ class AdBlockAccessibilityService : AccessibilityService() {
         ))
 
         val clicked = target?.let { performClick(it) } ?: false
-        candidates.forEach { if (it != target) it.recycle() }
+        candidates.forEach { if (it != target) try { it.recycle() } catch (e: Exception) { } }
         return clicked
     }
 
@@ -275,7 +259,7 @@ class AdBlockAccessibilityService : AccessibilityService() {
                 if (inTopLeft || inTopRight) {
                     val area = rect.width() * rect.height()
                     if (area in 1..10000 && area < bestArea) {
-                        best?.recycle()
+                        best?.let { try { it.recycle() } catch (e: Exception) { } }
                         best = AccessibilityNodeInfo.obtain(node)
                         bestArea = area
                     }
@@ -284,33 +268,45 @@ class AdBlockAccessibilityService : AccessibilityService() {
             for (i in 0 until node.childCount) {
                 node.getChild(i)?.let { queue.add(it) }
             }
-            node.recycle()
+            try { node.recycle() } catch (e: Exception) { }
         }
 
-        best?.let { performClick(it); it.recycle() }
+        best?.let {
+            performClick(it)
+            try { it.recycle() } catch (e: Exception) { }
+        }
     }
 
     private fun performClick(node: AccessibilityNodeInfo): Boolean {
         val clickableParent = findClickableParent(node)
         val target = clickableParent ?: node
-        val clicked = target.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        val clicked = try {
+            target.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        } catch (e: Exception) {
+            false
+        }
         val label = node.text ?: node.contentDescription ?: node.viewIdResourceName ?: "unknown"
         Log.i(TAG, "Auto clicked: $label -> $clicked")
-        clickableParent?.recycle()
+        clickableParent?.let { try { it.recycle() } catch (e: Exception) { } }
         return clicked
     }
 
     private fun findClickableParent(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-        var parent = node.parent
+        var parent: AccessibilityNodeInfo? = null
         var depth = 0
-        while (parent != null && depth < 5) {
-            if (parent.isClickable) return parent
-            val p = parent.parent
-            parent.recycle()
-            parent = p
-            depth++
+        try {
+            parent = node.parent
+            while (parent != null && depth < 5) {
+                if (parent.isClickable) return parent
+                val p = parent.parent
+                try { parent.recycle() } catch (e: Exception) { }
+                parent = p
+                depth++
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "findClickableParent error", e)
         }
-        parent?.recycle()
+        parent?.let { try { it.recycle() } catch (e: Exception) { } }
         return null
     }
 
@@ -320,14 +316,14 @@ class AdBlockAccessibilityService : AccessibilityService() {
         while (queue.isNotEmpty()) {
             val (node, depth) = queue.removeFirst()
             if (depth > MAX_DEPTH) {
-                node.recycle()
+                try { node.recycle() } catch (e: Exception) { }
                 continue
             }
             if (condition(node)) return node
             for (i in 0 until node.childCount) {
                 node.getChild(i)?.let { queue.add(it to depth + 1) }
             }
-            node.recycle()
+            try { node.recycle() } catch (e: Exception) { }
         }
         return null
     }
@@ -336,6 +332,7 @@ class AdBlockAccessibilityService : AccessibilityService() {
         try {
             val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
             wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "AdBlocker::KeepAlive")
+            wakeLock?.setReferenceCounted(false)
             wakeLock?.acquire(10 * 60 * 1000L)
         } catch (e: Exception) {
             Log.e(TAG, "WakeLock error", e)
@@ -343,20 +340,24 @@ class AdBlockAccessibilityService : AccessibilityService() {
     }
 
     private fun startForeground() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID, "广告拦截服务",
-                NotificationManager.IMPORTANCE_LOW
-            )
-            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
-                .createNotificationChannel(channel)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val channel = NotificationChannel(
+                    CHANNEL_ID, "广告拦截服务",
+                    NotificationManager.IMPORTANCE_LOW
+                )
+                (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+                    .createNotificationChannel(channel)
+            }
+            val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle("AdBlocker 运行中")
+                .setContentText("正在自动识别并关闭广告弹窗")
+                .setSmallIcon(android.R.drawable.ic_menu_close_clear_cancel)
+                .setOngoing(true)
+                .build()
+            startForeground(NOTIF_ID, notification)
+        } catch (e: Exception) {
+            Log.e(TAG, "startForeground error", e)
         }
-        val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("AdBlocker 运行中")
-            .setContentText("正在自动识别并关闭广告弹窗")
-            .setSmallIcon(android.R.drawable.ic_menu_close_clear_cancel)
-            .setOngoing(true)
-            .build()
-        startForeground(NOTIF_ID, notification)
     }
 }

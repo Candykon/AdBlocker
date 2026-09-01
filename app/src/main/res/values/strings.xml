@@ -1,10 +1,20 @@
 <resources>
     <string name="app_name">AdBlocker</string>
     <string name="service_desc">自动识别并关闭应用弹窗广告、跳过开屏广告、抑制摇一摇触发、倒计时广告自动等待关闭。</string>
-    <string name="open_accessibility">开启无障碍服务</string>
-    <string name="ignore_battery">忽略电池优化</string>
-    <string name="auto_start">设置开机自启动</string>
+    <string name="open_accessibility">1. 开启无障碍服务</string>
+    <string name="ignore_battery">2. 忽略电池优化</string>
+    <string name="auto_start">3. 设置自启动/后台运行</string>
+    <string name="check_root">检测 Root / LSPosed</string>
     <string name="status_running">运行中</string>
     <string name="status_stopped">已停止</string>
-    <string name="hint">首次使用请授予无障碍权限，允许忽略电池优化，并在系统设置中开启自启动，保持应用在后台运行。</string>
+    <string name="root_check_hint">点击上方按钮检测 Root 与 LSPosed</string>
+    <string name="hint">
+        使用说明：\n
+        1. 点击【检测 Root / LSPosed】，如果已 Root 且安装了 LSPosed，建议再装 AdBlocker-Force 模块。\n
+        2. 点击【开启无障碍服务】，在系统设置里找到 AdBlocker 并启用。\n
+        3. 点击【忽略电池优化】，允许后台运行。\n
+        4. 点击【设置自启动/后台运行】，按厂商指引开启自启动、后台运行、关联启动。\n
+        \n
+        注意：AdBlocker-Force 是 LSPosed 模块，安装后没有桌面图标，需在 LSPosed 管理器 → 模块中启用。
+    </string>
 </resources>

@@ -85,7 +85,6 @@ class AdBlockAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null || !isConnected) return
         val root = try { rootInActiveWindow } catch (e: Exception) { null } ?: return
-        if (!root.isRefresh) return
         try {
             if (findAndClickCloseNode(root)) return
             if (containsCountdown(root) && !isPolling) {

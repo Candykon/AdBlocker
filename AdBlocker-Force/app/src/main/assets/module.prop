@@ -1,0 +1,6 @@
+id=adblocker_force
+name=AdBlocker Force
+version=v1.0
+versionCode=1
+author=shiyuanyuan
+description=强制拦截应用内广告弹窗、摇一摇广告与广告 Activity（需 LSPosed）

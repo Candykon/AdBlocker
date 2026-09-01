@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">AdBlocker</string>
+    <string name="service_desc">自动识别并关闭应用弹窗广告、跳过开屏广告、抑制摇一摇触发、倒计时广告自动等待关闭。</string>
+    <string name="open_accessibility">开启无障碍服务</string>
+    <string name="ignore_battery">忽略电池优化</string>
+    <string name="auto_start">设置开机自启动</string>
+    <string name="status_running">运行中</string>
+    <string name="status_stopped">已停止</string>
+    <string name="hint">首次使用请授予无障碍权限，允许忽略电池优化，并在系统设置中开启自启动，保持应用在后台运行。</string>
+</resources>

@@ -1,0 +1,2 @@
+-keep class com.shiyuanyuan.adblockerforce.HookEntry
+-keep class de.robv.android.xposed.** { *; }

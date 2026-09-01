@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.shiyuanyuan.adblockerforce">
+
+    <application
+        android:allowBackup="true"
+        android:icon="@android:drawable/ic_menu_close_clear_cancel"
+        android:label="@string/app_name">
+
+        <meta-data
+            android:name="xposedmodule"
+            android:value="true" />
+        <meta-data
+            android:name="xposeddescription"
+            android:value="强制拦截应用内广告弹窗、摇一摇广告与广告 Activity" />
+        <meta-data
+            android:name="xposedminversion"
+            android:value="82" />
+    </application>
+</manifest>

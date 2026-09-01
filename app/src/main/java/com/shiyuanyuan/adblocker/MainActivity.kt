@@ -1,6 +1,7 @@
 package com.shiyuanyuan.adblocker
 
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.view.accessibility.AccessibilityManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri

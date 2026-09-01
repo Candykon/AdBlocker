@@ -18,30 +18,13 @@ import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 import de.robv.android.xposed.callbacks.XC_LoadPackage
 
-/**
- * LSPosed 强制拦截模块（增强版）。
- *
- * 拦截层级：
- * 1. Activity.startActivityForResult：拦截广告 Activity 启动。
- * 2. Dialog.show：阻止广告 Dialog 显示。
- * 3. PopupWindow.show*：阻止浮层广告。
- * 4. Toast / Snackbar：拦截广告提示。
- * 5. WebView.loadUrl/loadData*：拦截广告 URL 与 HTML。
- * 6. CountDownTimer.start：让倒计时立即结束，破解“看几秒才能关”。
- * 7. 常见广告 SDK 视频播放器：直接回调 onReward / onVideoComplete。
- * 8. SensorManager.registerListener：屏蔽加速度/陀螺仪，废掉摇一摇。
- */
 class HookEntry : IXposedHookLoadPackage {
 
     companion object {
         private const val TAG = "AdBlockerForce"
 
-        // 留空 = 对所有应用生效；否则只拦截列表内应用
-        private val TARGET_PACKAGES = setOf<String>(
-            // "com.example.app"
-        )
+        private val TARGET_PACKAGES = setOf<String>()
 
-        // 广告 Activity/类名关键词
         private val AD_ACTIVITY_KEYWORDS = listOf(
             "splash", "adactivity", "ad activity", "interstitial", "rewardvideo",
             "rewarded", "fullscreenad", "popupad", "feedad", "bannerad", "nativead",
@@ -50,13 +33,11 @@ class HookEntry : IXposedHookLoadPackage {
             "ksrewardvideo", "kssplash", "kssdk", "mimoactivity"
         )
 
-        // 广告 Dialog/Popup/Fragment/View 关键词
         private val AD_VIEW_KEYWORDS = listOf(
             "ad", "advert", "popup", "interstitial", "splash", "reward", "banner",
             "native", "feed", "insert", "fullscreen", "float", "marquee", "pangle"
         )
 
-        // 广告 URL 关键词
         private val AD_URL_KEYWORDS = listOf(
             "/ad.", "/ads/", "/adsvr/", "adsystem", "adserver", "advertising",
             "googleads", "doubleclick", "googlesyndication", "facebook.com/tr",
@@ -64,7 +45,6 @@ class HookEntry : IXposedHookLoadPackage {
             "ad.api", "adnet", "admarvel", "admob", "adservice", "adtrack"
         )
 
-        // 常见广告 SDK 视频播放类（包名/类名片段）
         private val AD_VIDEO_PLAYER_CLASSES = listOf(
             "com.bytedance.sdk.openadsdk.core.video",
             "com.bytedance.sdk.openadsdk.TTRewardVideoActivity",
@@ -225,9 +205,6 @@ class HookEntry : IXposedHookLoadPackage {
         }
     }
 
-    /**
-     * 让 CountDownTimer 瞬间结束，破解“看 N 秒才能关闭”。
-     */
     private fun hookCountDownTimer(lpparam: XC_LoadPackage.LoadPackageParam) {
         try {
             XposedHelpers.findAndHookMethod(
@@ -237,13 +214,12 @@ class HookEntry : IXposedHookLoadPackage {
                     override fun beforeHookedMethod(param: MethodHookParam) {
                         val timer = param.thisObject
                         try {
-                            // 调用 onFinish() 让倒计时直接结束
                             XposedHelpers.callMethod(timer, "onFinish")
                         } catch (e: Throwable) {
                             // ignore
                         }
                         XposedBridge.log("[$TAG] Skip CountDownTimer")
-                        param.result = timer // 返回自身，假装已开始
+                        param.result = timer
                     }
                 }
             )
@@ -252,15 +228,11 @@ class HookEntry : IXposedHookLoadPackage {
         }
     }
 
-    /**
-     * Hook 常见广告 SDK 的视频播放相关方法，直接触发完成/奖励回调。
-     */
     private fun hookAdVideoPlayers(lpparam: XC_LoadPackage.LoadPackageParam) {
         val loader = lpparam.classLoader
         AD_VIDEO_PLAYER_CLASSES.forEach { className ->
             try {
                 val cls = XposedHelpers.findClass(className, loader)
-                // 常见回调方法名
                 arrayOf("onReward", "onVideoComplete", "onVideoAdComplete", "onAdShow",
                         "onAdVideoBarClick", "onSkippedVideo", "onAdClose").forEach { methodName ->
                     cls.declaredMethods.firstOrNull { it.name == methodName }?.let { method ->
@@ -285,22 +257,29 @@ class HookEntry : IXposedHookLoadPackage {
 
     private fun hookSensorManager(lpparam: XC_LoadPackage.LoadPackageParam) {
         try {
-            XposedHelpers.findAndHookMethod(
-                SensorManager::class.java,
-                "registerListener",
-                SensorEventListener::class.java,
-                Sensor::class.java,
-                Int::class.javaPrimitiveType,
-                object : XC_MethodHook() {
-                    override fun beforeHookedMethod(param: MethodHookParam) {
-                        val sensor = param.args[1] as? Sensor ?: return
-                        if (sensor.type in BLOCKED_SENSOR_TYPES) {
-                            XposedBridge.log("[$TAG] Block sensor type: ${sensor.type}")
-                            param.result = true
+            val sensorManagerCls = XposedHelpers.findClass("android.hardware.SensorManager", lpparam.classLoader)
+            sensorManagerCls.declaredMethods.filter {
+                it.name == "registerListener" && it.parameterTypes.contains(Sensor::class.java)
+            }.forEach { method ->
+                try {
+                    XposedHelpers.findAndHookMethod(
+                        sensorManagerCls,
+                        "registerListener",
+                        *method.parameterTypes,
+                        object : XC_MethodHook() {
+                            override fun beforeHookedMethod(param: MethodHookParam) {
+                                val sensor = param.args.firstOrNull { it is Sensor } as? Sensor ?: return
+                                if (sensor.type in BLOCKED_SENSOR_TYPES) {
+                                    XposedBridge.log("[$TAG] Block sensor type: ${sensor.type}")
+                                    param.result = true
+                                }
+                            }
                         }
-                    }
+                    )
+                } catch (e: Throwable) {
+                    XposedBridge.log("[$TAG] Hook SensorManager.registerListener overload failed: ${e.message}")
                 }
-            )
+            }
         } catch (e: Throwable) {
             XposedBridge.log("[$TAG] Hook SensorManager failed: ${e.message}")
         }
